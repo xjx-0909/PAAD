@@ -1,0 +1,306 @@
+library(data.table)
+exp <- read.table("PAAD.N4_T177.exp.txt", as.is=TRUE, header=T,check.names = FALSE)
+venn <- read.table("venn_subset.txt", as.is=TRUE, header=F,check.names = FALSE)
+rownames(venn)=venn$V1
+z1=intersect(rownames(venn),rownames(exp))
+PAAD.exp.fliter=t(exp[z1,])
+write.table(PAAD.exp.fliter,file = "geneexp.txt",quote = T,sep =  "\t",col.names = T,row.names = T)
+
+library(glmnet)
+library(survival)
+t1=read.table("time.txt",header = T,sep = "\t",check.names =F)
+t2=read.table("geneexp.txt",header = T,sep = "\t",check.names =F)  
+cliexp=merge(t1,t2,by.x="id",by.y = 0)
+write.table(cliexp,"lassoinput.txt",sep = "\t",quote = F,row.names = F)
+
+library(foreign)
+library(survival)
+library(caret)
+TARGET<-read.table("TARGET_dev.txt",header=T,sep="\t")
+set.seed(100)
+TARGETd<-createDataPartition(y=TARGET$id,p=0.70,list=F)
+TARGETdev<-TARGET[TARGETd, ]
+TARGETv<-TARGET[-TARGETd,] 
+write.csv(TARGETdev, "TARGET_dev.csv")
+write.csv(TARGETv, "TARGET_ver.csv")
+
+library(igraph)
+library(reshape2)
+TCGA=read.table("ht.txt",header = T,sep = "\t",check.names = F)
+row.names(TCGA)=TCGA$id
+#st<- which(substr(colnames(TCGA),14,15) == '01')
+tumor=TCGA[,c(5:181)]    
+tumor=t(tumor[as.vector(row.names(TCGA)),])
+cd=cor(tumor)
+newdata = cd
+ud = upper.tri(newdata)
+newdata[ud] = NA
+genedf = data.frame(gene=rownames(newdata),newdata)
+meltd = melt(genedf,id="gene")
+meltd= meltd[!is.na(meltd$value),]
+meltd = meltd[meltd$gene!=meltd$variable,]
+meltd = meltd[abs(meltd$value)>0,]
+cw= meltd$value
+w = cw+abs(min(cw))+5
+df = data.frame(n1=meltd$gene,n2=meltd$variable,w=meltd$value)
+gf = graph.data.frame(meltd,directed = F)
+E(gf)$color = ifelse(cw>0,rgb(253/255,70/255,99/255,abs(cw)),rgb(0/255,0/255,254/255,abs(cw)))
+V(gf)$size = 7
+V(gf)$shape = "circle"
+V(gf)$lable.cex = 1.3
+V(gf)$color = "white"
+E(gf)$weight = w
+
+pdf("corr_network.pdf",8,8)
+layout(matrix(c(1,1,1,0,2,0),byrow=T,nc=3),height=c(6,1),width=c(3,4,3))
+par(mar=c(1.5,1.5,2,2))
+vertex.frame.color = NA
+plot(gf,layout=layout_nicely,vertex.label.cex=V(gf)$lable.cex,
+     edge.width = E(gf)$weight,edge.arrow.size=0,
+     vertex.label.color="black",
+     vertex.frame.color=vertex.frame.color,
+     edge.color=E(gf)$color,vertex.label.cex=V(gf)$lable.cex,vertex.label.font=2,vertex.size=V(gf)$size,edge.curved=0.4)
+
+color_legend = c(rgb(253/255,70/255,99/255,seq(1,0,by=-0.01)),rgb(0/255,0/255,254/255,seq(0,1,by=0.01)))
+par(mar=c(2,2,1,2),xpd = T,cex.axis=1.6,las=1)
+barplot(rep(1,length(color_legend)),border = NA, space = 0,ylab="",xlab="",xlim=c(1,length(color_legend)),horiz=F,
+        axes = F, col=color_legend,main="")
+axis(3,at=seq(1,length(color_legend),length=5),c(1,0.5,0,-0.5,-1),tick=F)
+dev.off()
+
+library(survival)
+library(forestplot)
+data1=read.table("lassoinput.txt",header=T,sep="\t",check.names=F,row.names=1)
+newdf2=data.frame()
+colnames(data1)
+fmla2 <- as.formula(Surv(survival_time,status)~CXCL8)
+mycox2 <- coxph(fmla2,data=data1)
+coxResult2 = summary(mycox2)
+newdf2=cbind(
+  HR=coxResult2$conf.int[,"exp(coef)"],
+  HR_95L=coxResult2$conf.int[,"lower .95"],
+  HR_95U=coxResult2$conf.int[,"upper .95"],
+  P=coxResult2$coefficients[,"Pr(>|z|)"])
+newdf2=cbind(id=row.names(newdf2),newdf2)
+
+
+library(glmnet)
+library(survival)
+t1=read.table("id.txt",header = T,sep = "\t",check.names =F)
+t2=read.table("geneexp.txt",header = T,sep = "\t",check.names =F)
+cliexp=merge(t1,t2,by="id")
+write.table(cliexp,"lasso.txt",sep = "\t",quote = F,row.names = F)
+t1=read.table("time.txt",header = T,sep = "\t",check.names =F)
+t2=read.table("t1.txt",header = T,sep = "\t",check.names =F)  
+cliexp=merge(t1,t2,by="id")
+write.table(cliexp,"lassoinput.txt",sep = "\t",quote = F,row.names = F)
+mydata<-read.table("lassoinput.txt",header=T,sep="\t",row.names = 1,check.names = F,stringsAsFactors = F) 
+v1<-as.matrix(mydata[,c(3:ncol(mydata))])
+v2 <- as.matrix(Surv(mydata$survival_time,mydata$status))
+myfit <- glmnet(v1, v2, family = "cox")
+pdf("lambda.pdf")
+plot(myfit, xvar = "lambda", label = TRUE)
+dev.off()
+myfit2 <- cv.glmnet(v1, v2, family="cox",nfolds = 10)
+pdf("min.pdf")
+plot(myfit2)
+abline(v=log(c(myfit2$lambda.min,myfit2$lambda.1se)),lty="dashed")
+dev.off()
+coe <- coef(myfit, s = myfit2$lambda.min)
+act_index <- which(coe != 0)
+act_coe <- coe[act_index]
+row.names(coe)[act_index]
+
+
+library(survival)
+library(forestplot)
+data1=read.table("lassoinput.txt",header=T,sep="\t",check.names=F,row.names=1)
+newdf2=data.frame()
+colnames(data1)
+fmla2 <- as.formula(Surv(survival_time,status)~ACTB+ACTN4+CD2AP+FLNB+IQGAP1+MYH9)
+mycox2 <- coxph(fmla2,data=data1)
+coxResult2 = summary(mycox2)
+risk_score<-predict(mycox2,type="risk",newdata=data1)
+risk_level<-as.factor(ifelse(risk_score>median(risk_score),"High","Low"))
+write.table(cbind(id=rownames(cbind(data1[,1:2],risk_score,risk_level)),cbind(data1[,1:2],risk_score,risk_level)),
+            "risk_score.txt",sep="\t",quote=F,row.names=F)
+newdf2=cbind(
+  HR=coxResult2$conf.int[,"exp(coef)"],
+  HR_95L=coxResult2$conf.int[,"lower .95"],
+  HR_95U=coxResult2$conf.int[,"upper .95"],
+  P=coxResult2$coefficients[,"Pr(>|z|)"])
+newdf2=cbind(id=row.names(newdf2),newdf2)
+write.table(newdf2,"resut2.txt",sep="\t",row.names=F,quote=F)
+
+data2=read.table("resut2.txt",header=T,sep="\t",row.names=1,check.names=F)
+HRdf=as.matrix(data2)
+HRdf1=HRdf[,1:3]
+HR=sprintf("%.4f",HRdf1[,"HR"])
+HR_95L=sprintf("%.4f",HRdf1[,"HR_95L"])
+HR_95U=sprintf("%.4f",HRdf1[,"HR_95U"])
+P=HRdf[,"P"]
+P=ifelse(P<0.001, "<0.001", sprintf("%.4f", P))
+wenben<- list(c(NA, rownames(HRdf1)),
+              append("P-value", P),
+              append("Hazard ratio",paste0(HR,"(",HR_95L,"-",HR_95U,")")) )          
+pdf("forest2.pdf",8,8)
+forestplot(wenben, 
+           rbind(rep(NA, 3), HRdf1),
+           col=fpColors(box="red",line="black", summary="black") ,
+           graphwidth=unit(50, "mm"),
+           xlog=T,
+           lwd.ci=2,
+           boxsize=0.3,
+           xlab="Hazard ratio")
+dev.off()
+coxResult2 
+
+library(survival)
+library(forestplot)
+data1=read.table("lassoinput.txt",header=T,sep="\t",check.names=F,row.names=1)
+newdf2=data.frame()
+colnames(data1)
+fmla2 <- as.formula(Surv(survival_time,status)~CXCL8+FN1+STAT1+TNFSF10+SLC44A2+LGALS3+S100A11+SERPINA1)
+mycox2 <- coxph(fmla2,data=data1)
+coxResult2 = summary(mycox2)
+risk_score<-predict(mycox2,type="risk",newdata=data1)
+risk_level<-as.factor(ifelse(risk_score>median(risk_score),"High","Low"))
+write.table(cbind(id=rownames(cbind(data1[,1:2],risk_score,risk_level)),cbind(data1[,1:2],risk_score,risk_level)),
+            "risk_score.txt",sep="\t",quote=F,row.names=F)
+newdf2=cbind(
+  HR=coxResult2$conf.int[,"exp(coef)"],
+  HR_95L=coxResult2$conf.int[,"lower .95"],
+  HR_95U=coxResult2$conf.int[,"upper .95"],
+  P=coxResult2$coefficients[,"Pr(>|z|)"])
+newdf2=cbind(id=row.names(newdf2),newdf2)
+
+write.table(newdf2,"resut2.txt",sep="\t",row.names=F,quote=F)
+
+
+data2=read.table("resut2.txt",header=T,sep="\t",row.names=1,check.names=F)
+HRdf=as.matrix(data2)
+HRdf1=HRdf[,1:3]
+HR=sprintf("%.4f",HRdf1[,"HR"])
+HR_95L=sprintf("%.4f",HRdf1[,"HR_95L"])
+HR_95U=sprintf("%.4f",HRdf1[,"HR_95U"])
+P=HRdf[,"P"]
+P=ifelse(P<0.001, "<0.001", sprintf("%.4f", P))
+wenben<- list(c(NA, rownames(HRdf1)),
+              append("P-value", P),
+              append("Hazard ratio",paste0(HR,"(",HR_95L,"-",HR_95U,")")) )          
+pdf("forest2.pdf",8,8)
+forestplot(wenben, 
+           rbind(rep(NA, 3), HRdf1),
+           col=fpColors(box="red",line="black", summary="black") ,
+           graphwidth=unit(50, "mm"),
+           xlog=T,
+           lwd.ci=2,
+           boxsize=0.3,
+           xlab="Hazard ratio")
+dev.off()
+coxResult2 
+
+
+library(Rtsne)
+data1=read.table("lassoinput.txt",header = T,sep = "\t",check.names = F)
+data2=read.table("risk_score.txt",header = T,sep = "\t",check.names = F)
+data3=merge(data1,data2,by="id")
+write.table(data3,"pca.txt",sep = "\t",quote = F,row.names = F)
+
+#pca
+pcadata=read.table("pca.txt",header = T,sep = "\t",check.names = F)
+newdata=pcadata[c(2:(ncol(pcadata)-1))]
+newdata=log2(newdata+1)
+pca=prcomp(newdata,scale=T)
+pcapre=predict(pca)
+df = data.frame(PCA1 =pcapre[,1], PCA2 = pcapre[,2],group=pcadata[,"risk_level"])
+PCA1=df$PCA1
+PCA2=df$PCA2
+pdf("PCA.pdf",8,6)
+plot(PCA1,PCA2,col=ifelse(df$group=="High","red","blue"),pch=16)
+legend("topright",legend = c("High risk","Low risk"),
+       col = c("red","blue"),pch=16)
+dev.off()
+
+#t-SNE
+tsnedata=Rtsne(newdata, dims=2, perplexity=10, 
+               verbose=F, max_iter=500,check_duplicates=F)
+newdf =data.frame(tSNE1=tsnedata$Y[,1], 
+                  tSNE2 = tsnedata$Y[,2],
+                  group=pcadata[,"risk_level"])	
+tSNE1=newdf$tSNE1
+tSNE2=newdf$tSNE2
+pdf("tSNE.pdf",8,6)
+plot(tSNE1,tSNE2,col=ifelse(newdf$group=="High","red","blue"),pch=16)
+legend("topleft",legend = c("High risk","Low risk"),
+       col = c("red","blue"),pch=16)
+dev.off()
+
+library(survival)
+library(timeROC)
+inputmiRNA<- read.table("risk_score.txt",header=T,sep="\t",check.names = F,row.names = 1)
+
+inputmiRNA$survival_time=inputmiRNA$survival_time/365 
+
+#survival
+kms<-survfit(Surv(survival_time,status)~risk_level,data=inputmiRNA)
+kmdffexp=survdiff(Surv(survival_time,status)~risk_level,data=inputmiRNA)
+pValue=round(1-pchisq(kmdffexp$chisq,df=1),4)
+
+pdf("survival_risk.pdf",6,6)
+plot(kms,lty=1.5,col=c("red","blue"),mark.time =T,
+     xlab="Time(year)",ylab="Survival rate",
+     main=paste("Risk score","(P=", pValue ,")",sep=""))
+legend("topright",c("High risk","Low risk"),lty=1.5,col=c("red","blue"))
+dev.off()
+
+#ROC
+TCGA<-read.table("risk_score.txt",header=T,sep="\t")
+predict_1_year<- 1*365
+predict_2_year<- 2*365
+predict_3_year<- 3*365
+
+ROC<-timeROC(T=TCGA$survival_time,delta=TCGA$status,
+             marker=TCGA$risk_score,cause=1,
+             weighting="marginal",
+             times=c(predict_1_year,predict_2_year,predict_3_year),ROC=T)
+
+pdf("ROC.pdf")
+plot(ROC,time=predict_1_year,title=F,lwd=3)
+plot(ROC,time=predict_2_year,col="yellow",add=T,title=F,lwd=3)
+plot(ROC,time=predict_3_year,col="blue",add=T,title=F,lwd=3)
+legend("bottomright",
+       c(paste("AUC of 1 year survival: ",round(ROC$AUC[1],3)),
+         paste("AUC of 2 year survival: ",round(ROC$AUC[2],3)),
+         paste("AUC of 3 year surviva",round(ROC$AUC[3],3))),col=c("red","yellow","blue"),lwd=3)
+dev.off()
+
+
+#riskline
+myrisk=read.table("risk_score.txt",sep="\t",
+                  header=T,row.names=1,check.names=F)
+
+head(myrisk)
+myrisk=myrisk[order(myrisk$risk_score),]    
+mygroup=myrisk[,"risk_level"]
+ll=length(mygroup[mygroup=="Low"])
+hl=length(mygroup[mygroup=="High"])
+lm=max(myrisk$risk_score[mygroup=="Low"])
+line=myrisk[,"risk_score"]
+line[line>10]=10
+pdf("riskline.pdf",8,6)
+plot(line, type="p", pch=16,
+     xlab="Patients (increasing risk socre)", ylab="Risk score",
+     col=c(rep("blue",ll),rep("red",hl)) )
+abline(h=lm,v=ll,lty=2)
+dev.off()
+
+
+
+pdf("riskpoint.pdf",8,6)
+plot(myrisk$survival_time/365, pch=16,
+     xlab="Patients (increasing risk socre)", ylab="Survival time (years)",
+     col=ifelse(myrisk$status=="1","red","blue"))
+legend("topright", c("Dead", "Alive"),pch=16,col=c("red","blue"),cex=1.2)
+abline(v=ll,lty=2)
+dev.off()
